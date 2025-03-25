@@ -12,27 +12,23 @@ import InputGroup from "react-bootstrap/InputGroup";
 const InvoiceForm = () => {
   const [isOpen, setIsOpen] = useState(false);
   const [currency, setCurrency] = useState("$");
-  const [currentDate, setCurrentDate] = useState(
-    new Date().toLocaleDateString()
-  );
+  const [currentDate, setCurrentDate] = useState(new Date().toLocaleDateString());
   const [invoiceNumber, setInvoiceNumber] = useState(1);
   const [dateOfIssue, setDateOfIssue] = useState("");
   const [billTo, setBillTo] = useState("");
   const [billToEmail, setBillToEmail] = useState("example@example.com");
-  const [billToPhone, setBillToPhone] = useState(""); // New phone number state
+  const [billToPhone, setBillToPhone] = useState("");
   const [billToAddress, setBillToAddress] = useState("");
   const [billFrom, setBillFrom] = useState("");
   const [billFromEmail, setBillFromEmail] = useState("example@example.com");
-  const [billFromPhone, setBillFromPhone] = useState(""); // New phone number state
+  const [billFromPhone, setBillFromPhone] = useState("");
   const [billFromAddress, setBillFromAddress] = useState("");
-  const [notes, setNotes] = useState(
-    "Thank you for doing business with us. Have a great day!"
-  );
+  const [notes, setNotes] = useState("Thank you for doing business with us. Have a great day!");
   const [total, setTotal] = useState("0.00");
   const [subTotal, setSubTotal] = useState("0.00");
   const [taxRate, setTaxRate] = useState("");
-  const [cgstRate, setCgstRate] = useState("0.00"); // CGST rate state
-  const [sgstRate, setSgstRate] = useState("0.00"); // SGST rate state
+  const [cgstRate, setCgstRate] = useState("0.00");
+  const [sgstRate, setSgstRate] = useState("0.00");
   const [taxAmount, setTaxAmount] = useState("0.00");
   const [discountRate, setDiscountRate] = useState("");
   const [discountAmount, setDiscountAmount] = useState("0.00");
@@ -47,12 +43,23 @@ const InvoiceForm = () => {
     },
   ]);
 
+  // Load invoice number from local storage
+  useEffect(() => {
+    const storedInvoiceNumber = localStorage.getItem("invoiceNumber");
+    if (storedInvoiceNumber) {
+      setInvoiceNumber(parseInt(storedInvoiceNumber, 10));
+    }
+  }, []);
+
+  // Save the invoice number to local storage
+  useEffect(() => {
+    localStorage.setItem("invoiceNumber", invoiceNumber);
+  }, [invoiceNumber]);
+
   const handleCalculateTotal = useCallback(() => {
-    let newSubTotal = items
-      .reduce((acc, item) => {
-        return acc + parseFloat(item.price) * parseInt(item.quantity);
-      }, 0)
-      .toFixed(2);
+    let newSubTotal = items.reduce((acc, item) => {
+      return acc + parseFloat(item.price) * parseInt(item.quantity);
+    }, 0).toFixed(2);
 
     let newtaxAmount = (newSubTotal * (taxRate / 100)).toFixed(2);
     let newdiscountAmount = (newSubTotal * (discountRate / 100)).toFixed(2);
@@ -95,9 +102,6 @@ const InvoiceForm = () => {
 
   const onItemizedItemEdit = (evt) => {
     const { id, name, value } = evt.target;
-
-    console.log(id, name, value);
-
     const updatedItems = items.map((item) =>
       item.id === id ? { ...item, [name]: value } : item
     );
@@ -117,6 +121,13 @@ const InvoiceForm = () => {
 
   const closeModal = () => {
     setIsOpen(false);
+  };
+
+  const shareInvoice = async () => {
+    // Logic to share the invoice via WhatsApp
+    // After sharing, refresh the page and increment the invoice number
+    setInvoiceNumber((prev) => prev + 1); // Increment the invoice number
+    window.location.reload(); // Refresh the page
   };
 
   return (
@@ -214,16 +225,6 @@ const InvoiceForm = () => {
                   className="my-2"
                   onChange={handleChange(setBillTo)}
                   autoComplete="name"
-                  required
-                />
-                <Form.Control
-                  placeholder="Email address"
-                  value={billToEmail}
-                  type="email"
-                  name="billToEmail"
-                  className="my-2"
-                  onChange={handleChange(setBillToEmail)}
-                  autoComplete="email"
                   required
                 />
                 <Form.Control
@@ -330,19 +331,23 @@ const InvoiceForm = () => {
                 billTo,
                 billToEmail,
                 billToAddress,
+                billToPhone,
                 billFrom,
                 billFromEmail,
                 billFromAddress,
                 notes,
-                cgstRate, // Pass CGST rate
-                sgstRate, // Pass SGST rate
+                cgstRate,
+                sgstRate,
               }}
               items={items}
               currency={currency}
               subTotal={subTotal}
               taxAmount={taxAmount}
+              cgstRate={cgstRate}
+              sgstRate={sgstRate}
               discountAmount={discountAmount}
               total={total}
+              shareInvoice ={shareInvoice} // Pass the shareInvoice function to the modal
             />
 
             <Form.Group className="mb-3">
