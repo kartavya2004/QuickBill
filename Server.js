@@ -1,159 +1,171 @@
 const express = require("express");
 const cors = require("cors");
-const twilio = require("twilio");
+const axios = require("axios");
 require("dotenv").config();
 
+const connectDB = require('./src/config/db'); // Import database connection
+const initializeDB = require('./src/config/initDB');
+
+// Import routes
+const enterpriseRoutes = require('./src/routes/enterpriseRoutes');
+const invoiceRoutes = require('./src/routes/invoiceRoutes');
+const customerRoutes = require('./src/routes/customerRoutes');
+
+// Import middleware
+const { protect } = require('./src/middleware/auth');
+
 const app = express();
-app.use(cors());
-app.use(express.json());
 
-// In-memory store for enterprises and customers
-const enterprises = [];
-const customers = [];
-
-// Load Twilio credentials from environment variables
-const accountSid = process.env.TWILIO_ACCOUNT_SID;
-const authToken = process.env.TWILIO_AUTH_TOKEN;
-const client = twilio(accountSid, authToken);
-
-// Registration endpoint
-app.post("/api/register", (req, res) => {
-  const { enterpriseName, phone, email, address, password } = req.body;
-
-  if (!enterpriseName || !phone || !email || !address || !password) {
-    return res.status(400).json({ error: "All fields are required" });
-  }
-
-  const existingEnterprise = enterprises.find(ent => ent.email === email);
-  if (existingEnterprise) {
-    return res.status(400).json({ error: "Email already registered" });
-  }
-
-  const enterprise = {
-    id: Date.now().toString(),
-    enterpriseName,
-    phone,
-    email,
-    address,
-    password,
-    createdAt: new Date().toISOString()
-  };
-
-  enterprises.push(enterprise);
-
-  const { password: _, ...enterpriseWithoutPassword } = enterprise;
-  res.status(201).json({
-    success: "Enterprise registered successfully",
-    enterprise: enterpriseWithoutPassword
-  });
-});
-
-// Login endpoint
-app.post("/api/login", (req, res) => {
-  const { email, password } = req.body;
-
-  if (!email || !password) {
-    return res.status(400).json({ error: "Email and password are required" });
-  }
-
-  const enterprise = enterprises.find(ent => ent.email === email);
-  
-  if (!enterprise || enterprise.password !== password) {
-    return res.status(401).json({ error: "Invalid email or password" });
-  }
-
-  const { password: _, ...enterpriseWithoutPassword } = enterprise;
-  res.json({
-    success: "Login successful",
-    enterprise: enterpriseWithoutPassword
-  });
-});
-
-// Add customer transaction
-app.post("/api/customers", (req, res) => {
-  const { enterpriseEmail, customerName, customerPhone, itemPurchased, price, invoiceNumber } = req.body;
-
-  if (!enterpriseEmail || !customerName || !customerPhone || !itemPurchased || !price) {
-    return res.status(400).json({ error: "Missing required fields" });
-  }
-
-  const customer = {
-    id: Date.now().toString(),
-    enterpriseEmail,
-    customerName,
-    customerPhone,
-    itemPurchased,
-    price,
-    invoiceNumber,
-    transactionDate: new Date().toISOString()
-  };
-
-  customers.push(customer);
-  res.status(201).json({ success: "Customer transaction added successfully", customer });
-});
-
-// Get customer transactions for an enterprise
-app.get("/api/customers/:enterpriseEmail", (req, res) => {
-  const { enterpriseEmail } = req.params;
-  const enterpriseCustomers = customers.filter(customer => customer.enterpriseEmail === enterpriseEmail);
-  res.json(enterpriseCustomers);
-});
-
-// Existing WhatsApp sending endpoint
-app.post("/send-whatsapp", async (req, res) => {
-  const { phoneNumber, pdfUrl, invoiceNumber, billTo } = req.body;
-
-  if (!phoneNumber || !pdfUrl || !invoiceNumber || !billTo) {
-    return res.status(400).json({ error: "Missing required fields" });
-  }
-
-  try {
-    const message = await client.messages.create({
-        from: "whatsapp:+14155238886",
-        to: `whatsapp:${phoneNumber}`,
-        template: 'invoice',  // Use your actual Twilio template name
-        template_parameters: {
-            '1': pdfUrl,         // PDF link (for Media URL)
-            '2': billTo,         // Customer Name
-            '3': invoiceNumber   // Invoice Number
-        }
-    });
+// Connect to MongoDB and initialize data
+const setupDatabase = async () => {
     try {
-      const message = await client.messages.create({
-          from: "whatsapp:+14155238886",
-          to: `whatsapp:${phoneNumber}`,
-          template: 'invoice1',  // Use your actual Twilio template name
-          template_parameters: {
-              '1': invoice_1.pdf,         // PDF link (for Media URL)
-              '2': billTo,         // Customer Name
-              '3': invoiceNumber   // Invoice Number
-          }
-      });
-  
-      console.log("Message sent:", message.sid);
-  } catch (error) {
-      console.error("Error sending message:", error);
-  }
+        await connectDB();
+        console.log('MongoDB connected successfully');
+        
+        // Check if initialization is needed
+        if (process.env.INIT_DB === 'true') {
+            await initializeDB();
+            console.log('Database initialized with sample data');
+        }
+    } catch (error) {
+        console.error('Database setup error:', error);
+        process.exit(1);
+    }
+};
 
-    // Store customer transaction after successful WhatsApp send
-    const enterpriseEmail = req.body.enterpriseEmail;
-    if (enterpriseEmail) {
-      const customer = {
-        id: Date.now().toString(),
-        enterpriseEmail,
-        customerName: billTo,
-        customerPhone: phoneNumber,
-        invoiceNumber,
-        transactionDate: new Date().toISOString()
-      };
-      customers.push(customer);
+setupDatabase();
+
+// Middleware
+app.use(cors());
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
+
+// Initialize Twilio client if credentials are provided
+let twilioClient = null;
+if (process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_ACCOUNT_SID.startsWith('AC')) {
+    const twilio = require("twilio");
+    twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+    console.log('Twilio client initialized');
+} else {
+    console.log('Twilio credentials not configured or invalid');
+}
+
+// API Routes
+app.use('/api/enterprises', enterpriseRoutes);
+app.use('/api/invoices', protect, invoiceRoutes);
+app.use('/api/customers', protect, customerRoutes);
+
+// Database initialization endpoint (protected, use with caution)
+const initDB = require('./src/config/initDB');
+app.post('/api/init-db', async (req, res) => {
+    try {
+        await initializeDB();
+        res.json({ message: 'Database initialized successfully' });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// WhatsApp messaging endpoint
+app.post("/send-whatsapp", protect, async (req, res) => {
+    const { phoneNumber, pdfUrl,invoiceNumber, billTo, businessName, amount } = req.body;
+
+    if (!phoneNumber || !pdfUrl || !invoiceNumber || !billTo) {
+        return res.status(400).json({ error: "Missing required fields" });
     }
 
-    res.json({ success: "Invoice sent via WhatsApp!", messageSid: message.sid });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
+    try {
+        let messageSid;
+        const usePersonalApi = process.env.USE_PERSONAL_WHATSAPP === "true";
+
+        // Format message
+        const messageText = `Dear ${billTo},\n\nThank you for your business! Here is your invoice #${invoiceNumber} for ${amount}.\n\nBest regards,\n${businessName}`;
+
+        if (usePersonalApi) {
+            try {
+                const personalWhatsAppConfig = require("./whatsapp-api-personal.config.json");
+                
+                const messagePayload = {
+                    apiKey: personalWhatsAppConfig.apiKey,
+                    sender: personalWhatsAppConfig.sender,
+                    recipient: phoneNumber,
+                    message: messageText,
+                    document: typeof pdfUrl === 'string' && pdfUrl.startsWith('data:application/pdf;base64,')
+                        ? {
+                            data: pdfUrl.split(',')[1],
+                            filename: `invoice_${invoiceNumber}.pdf`
+                        }
+                        : { link: pdfUrl }
+                };
+
+                const response = await axios.post(personalWhatsAppConfig.apiEndpoint, messagePayload, {
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${personalWhatsAppConfig.apiKey}`
+                    }
+                });
+
+                messageSid = response.data.messageId || response.data.id;
+                console.log("Message sent using personal WhatsApp API:", messageSid);
+            } catch (error) {
+                console.error("Error sending message via personal WhatsApp API:", error);
+                throw new Error(`Failed to send message via personal WhatsApp API: ${error.message}`);
+            }
+        } else {
+            if (!twilioClient) {
+                throw new Error("Twilio not configured. Please configure Twilio or use personal WhatsApp API.");
+            }
+
+            const messageOptions = {
+                from: "whatsapp:+14155238886",
+                to: `whatsapp:${phoneNumber}`,
+                body: messageText
+            };
+
+            if (!pdfUrl.startsWith('data:')) {
+                messageOptions.mediaUrl = [pdfUrl];
+            }
+
+            const message = await twilioClient.messages.create(messageOptions);
+            messageSid = message.sid;
+            console.log("Message sent using Twilio:", messageSid);
+        }
+
+        // Update invoice status in database
+        if (req.enterprise) {
+            const Invoice = require('./src/models/Invoice');
+            await Invoice.findOneAndUpdate(
+                { invoiceNumber, enterprise: req.enterprise._id },
+                { 
+                    whatsappSent: true,
+                    whatsappSentAt: new Date(),
+                    status: 'sent'
+                }
+            );
+        }
+
+        res.json({ 
+            success: "Invoice sent via WhatsApp!", 
+            messageSid,
+            provider: usePersonalApi ? "personal" : "twilio"
+        });
+    } catch (error) {
+        console.error("WhatsApp sending error:", error);
+        res.status(500).json({ 
+            error: "Failed to send WhatsApp message", 
+            details: error.message 
+        });
+    }
+});
+
+// Error handling middleware
+app.use((err, req, res, next) => {
+    console.error(err.stack);
+    res.status(500).json({ error: 'Something went wrong!' });
 });
 
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
+    console.log(`MongoDB: ${process.env.MONGODB_URI || 'mongodb://localhost:27017/quickbill'}`);
+});
