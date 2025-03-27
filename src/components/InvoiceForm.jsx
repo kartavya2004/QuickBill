@@ -347,7 +347,7 @@ const InvoiceForm = () => {
               sgstRate={sgstRate}
               discountAmount={discountAmount}
               total={total}
-              shareInvoice ={shareInvoice} // Pass the shareInvoice function to the modal
+              shareInvoice={shareInvoice}
             />
 
             <Form.Group className="mb-3">
