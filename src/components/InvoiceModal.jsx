@@ -1,79 +1,108 @@
-import React from "react";
-import { useSnackbar } from 'notistack'; // Import useSnackbar
+import React, { useState } from "react";
+import { useSnackbar } from 'notistack';
 import "bootstrap/dist/css/bootstrap.min.css";
 import Row from "react-bootstrap/Row";
 import Col from "react-bootstrap/Col";
 import Button from "react-bootstrap/Button";
 import Table from "react-bootstrap/Table";
 import Modal from "react-bootstrap/Modal";
-import { BiCloudDownload } from "react-icons/bi";
+import { BiCloudDownload, BiShareAlt } from "react-icons/bi";
 import html2canvas from "html2canvas";
 import jsPDF from "jspdf";
-import { uploadToS3 } from "../utils/s3Uploader"; // Adjusted import path
+import { uploadToS3 } from "../utils/s3Uploader";
 
 const GenerateInvoice = async (info) => {
-  console.log("Generating invoice...");
-  const canvas = await html2canvas(document.querySelector("#invoiceCapture"));
-  const imgData = canvas.toDataURL("image/png", 1.0);
-  const pdf = new jsPDF({ orientation: "portrait", unit: "pt", format: [612, 792] });
-
-  pdf.internal.scaleFactor = 1;
-  const imgProps = pdf.getImageProperties(imgData);
-  const pdfWidth = pdf.internal.pageSize.getWidth();
-  const pdfHeight = (imgProps.height * pdfWidth) / imgProps.width;
-  pdf.addImage(imgData, "PNG", 0, 0, pdfWidth, pdfHeight);
-
-  // Convert PDF to Blob
-  const pdfBlob = pdf.output("blob");
-  const pdfUrl = URL.createObjectURL(pdfBlob);
-
   try {
-    const fileName = `invoice_${info.invoiceNumber}`; // Define fileName once
-    const fileUrl = await uploadToS3(pdfBlob, fileName); 
-    // Trigger download
-    const link = document.createElement('a');
-    link.href = pdfUrl;
-    link.download = fileName + ".pdf"; // Use fileName for download
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    console.log("Invoice generated and downloaded successfully.");
-    console.log("Uploaded Invoice URL:", fileUrl);
-    return fileUrl;
+    console.log("Generating invoice...");
+    const canvas = await html2canvas(document.querySelector("#invoiceCapture"));
+    const imgData = canvas.toDataURL("image/png", 1.0);
+    const pdf = new jsPDF({ orientation: "portrait", unit: "pt", format: [612, 792] });
+
+    pdf.internal.scaleFactor = 1;
+    const imgProps = pdf.getImageProperties(imgData);
+    const pdfWidth = pdf.internal.pageSize.getWidth();
+    const pdfHeight = (imgProps.height * pdfWidth) / imgProps.width;
+    pdf.addImage(imgData, "PNG", 0, 0, pdfWidth, pdfHeight);
+
+    // Convert PDF to Blob
+    const pdfBlob = pdf.output("blob");
+    
+    try {
+      const fileName = `invoice_${info.invoiceNumber}`;
+      // Try to upload to S3, but don't worry if it fails - we'll use local storage
+      const fileUrl = await uploadToS3(pdfBlob, fileName);
+      console.log("File URL generated:", fileUrl);
+      
+      // Always create a local download link
+      const localUrl = URL.createObjectURL(pdfBlob);
+      const link = document.createElement('a');
+      link.href = localUrl;
+      link.download = `${fileName}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      
+      return fileUrl || localUrl; // Use S3 URL if available, otherwise use local URL
+    } catch (error) {
+      console.error("Error in file handling:", error);
+      // Fallback to local URL if anything goes wrong
+      const localUrl = URL.createObjectURL(pdfBlob);
+      return localUrl;
+    }
   } catch (error) {
-    console.error("Error uploading invoice:", error);
-    return null;
+    console.error("Error generating invoice:", error);
+    throw error;
   }
 };
 
-const sendInvoiceViaWhatsApp = async (pdfUrl, info, enqueueSnackbar) => {
+const sendInvoiceViaWhatsApp = async (pdfUrl, info, enqueueSnackbar, currency, finalTotal) => {
   try {
-    console.log("Sending invoice via WhatsApp with URL:", pdfUrl); // Log the URL being sent
+    console.log("Sending invoice via WhatsApp with URL:", pdfUrl);
+    const token = localStorage.getItem('token'); // Adjusted to match the key used during login
+    console.log("Token being sent:", token); // Debugging log
     const response = await fetch("http://localhost:5000/send-whatsapp", {
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${token}` // Include the token in the headers
+      },
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        phoneNumber: info.billToPhone, // Ensure the correct phone number is used
+        phoneNumber: info.billToPhone,
         pdfUrl: pdfUrl,
         invoiceNumber: info.invoiceNumber,
         billTo: info.billTo,
+        businessName: info.billFrom,
+        enterpriseEmail: info.billFromEmail,
+        amount: `${currency} ${finalTotal}`
       }),
     });
 
     const data = await response.json();
+    console.log("Response from server:", data); // Debugging log
     if (response.ok) {
       console.log("Invoice sent successfully:", data);
-      enqueueSnackbar("Invoice sent via WhatsApp!", { variant: 'success' });
-      return true; // Indicate success
+
+      enqueueSnackbar(`Invoice sent via WhatsApp to ${info.billTo}!`, { 
+        variant: 'success',
+        autoHideDuration: 3000
+      });
+      return true;
     } else {
       console.error("Error sending invoice:", data);
-      enqueueSnackbar("Failed to send invoice.", { variant: 'error' });
-      return false; // Indicate failure
+      enqueueSnackbar(`Failed to send invoice: ${data.error}`, {
+        variant: 'error',
+        autoHideDuration: 5000
+      });
+      return false;
     }
   } catch (error) {
     console.error("Error:", error);
-    enqueueSnackbar("An error occurred while sending the invoice.", { variant: 'error' });
-    return false; // Indicate failure
+    enqueueSnackbar("Network error while sending the invoice.", { 
+      variant: 'error',
+      autoHideDuration: 5000
+    });
+    return false;
   }
 };
 
@@ -89,25 +118,46 @@ const InvoiceModal = ({
   cgstRate,
   sgstRate,
 }) => {
-  const { enqueueSnackbar } = useSnackbar(); // Use the useSnackbar hook
+  const { enqueueSnackbar } = useSnackbar();
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [isSending, setIsSending] = useState(false);
 
   const cgstAmount = ((parseFloat(subTotal) || 0) * (parseFloat(cgstRate) || 0) / 100).toFixed(2);
   const sgstAmount = ((parseFloat(subTotal) || 0) * (parseFloat(sgstRate) || 0) / 100).toFixed(2);
   const totalTax = (parseFloat(cgstAmount) || 0) + (parseFloat(sgstAmount) || 0);
   const finalTotal = (parseFloat(total) + totalTax).toFixed(2);
 
-  const shareInvoice = async () => {
-    const fileUrl = await GenerateInvoice(info); // Generate invoice first
-    if (!fileUrl) {
-      enqueueSnackbar("Failed to generate invoice.", { variant: 'error' });
-      return;
+  const handleDownload = async () => {
+    setIsGenerating(true);
+    try {
+      await GenerateInvoice(info);
+      enqueueSnackbar('Invoice downloaded successfully!', { variant: 'success' });
+    } catch (error) {
+      console.error('Error generating invoice:', error);
+      enqueueSnackbar('Failed to generate invoice', { variant: 'error' });
+    } finally {
+      setIsGenerating(false);
     }
-    const message = `Hi ${info.billTo}, your Invoice (ID: ${info.invoiceNumber}) is ready. Total Amount: ${finalTotal}. View your invoice here: ${fileUrl}.`;
-    const success = await sendInvoiceViaWhatsApp(fileUrl, info, enqueueSnackbar);
-    
-    if (success) {
-      // Refresh the page after successfully sending the invoice
-      window.location.reload();
+  };
+
+  const shareInvoice = async () => {
+    setIsSending(true);
+    try {
+      const fileUrl = await GenerateInvoice(info);
+      if (!fileUrl) {
+        enqueueSnackbar("Failed to generate invoice URL", { variant: 'error' });
+        return;
+      }
+
+      const success = await sendInvoiceViaWhatsApp(fileUrl, info, enqueueSnackbar, currency, finalTotal);
+      if (success) {
+        closeModal();
+      }
+    } catch (error) {
+      console.error("Error in shareInvoice:", error);
+      enqueueSnackbar("Failed to share invoice", { variant: 'error' });
+    } finally {
+      setIsSending(false);
     }
   };
 
@@ -238,28 +288,32 @@ const InvoiceModal = ({
       </div>
       <div className="pb-4 px-4">
         <Row>
-          <Col md={6}></Col>
           <Col md={6}>
             <Button
-              variant="outline-success"
-              className="d-block w-100 mt-3 mt-md-0"
-              onClick={async () => { await GenerateInvoice(info); }} // Call function on click
+              variant="outline-primary"
+              className="d-block w-100"
+              onClick={handleDownload}
+              disabled={isGenerating}
             >
               <BiCloudDownload
                 style={{ width: "16px", height: "16px", marginTop: "-3px" }}
                 className="me-2"
               />
-              Download Copy
+              {isGenerating ? 'Generating...' : 'Download PDF'}
             </Button>
           </Col>
-          <Col md={6}></Col>
           <Col md={6}>
             <Button
-              variant="outline-success"
-              className="d-block w-100 mt-3 mt-md-0"
+              variant="success"
+              className="d-block w-100"
               onClick={shareInvoice}
+              disabled={isSending}
             >
-              Share on WhatsApp
+              <BiShareAlt
+                style={{ width: "16px", height: "16px", marginTop: "-3px" }}
+                className="me-2"
+              />
+              {isSending ? 'Sending...' : 'Share via WhatsApp'}
             </Button>
           </Col>
         </Row>

@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Link, useHistory } from 'react-router-dom';
+import { useSnackbar } from 'notistack';
 import API_BASE_URL from '../utils/config';
 
 const Register = () => {
@@ -11,9 +12,9 @@ const Register = () => {
     password: '',
     confirmPassword: ''
   });
-  const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const history = useHistory();
+  const { enqueueSnackbar } = useSnackbar();
 
   const handleChange = (e) => {
     const { name, value } = e.target;
@@ -25,21 +26,21 @@ const Register = () => {
 
   const validateForm = () => {
     if (formData.password !== formData.confirmPassword) {
-      setError('Passwords do not match');
+      enqueueSnackbar('Passwords do not match', { variant: 'error' });
       return false;
     }
     if (formData.password.length < 6) {
-      setError('Password must be at least 6 characters long');
+      enqueueSnackbar('Password must be at least 6 characters long', { variant: 'error' });
       return false;
     }
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(formData.email)) {
-      setError('Please enter a valid email address');
+      enqueueSnackbar('Please enter a valid email address', { variant: 'error' });
       return false;
     }
     const phoneRegex = /^\+?[\d\s-]{10,}$/;
     if (!phoneRegex.test(formData.phone)) {
-      setError('Please enter a valid phone number');
+      enqueueSnackbar('Please enter a valid phone number', { variant: 'error' });
       return false;
     }
     return true;
@@ -47,7 +48,6 @@ const Register = () => {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    setError('');
 
     if (!validateForm()) {
       return;
@@ -57,7 +57,7 @@ const Register = () => {
 
     try {
       const { confirmPassword, ...registrationData } = formData;
-      const response = await fetch(`${API_BASE_URL}/api/register`, {
+      const response = await fetch(`${API_BASE_URL}/api/enterprises/register`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -71,10 +71,16 @@ const Register = () => {
         throw new Error(data.error || 'Registration failed');
       }
 
+      // Store user data and token
       localStorage.setItem('enterprise', JSON.stringify(data.enterprise));
-      history.push('/invoice');
+      localStorage.setItem('token', data.token);
+      localStorage.setItem('isLoggedIn', 'true');
+
+      enqueueSnackbar('Registration successful!', { variant: 'success' });
+      history.push('/dashboard');
     } catch (err) {
-      setError(err.message);
+      console.error('Registration error:', err);
+      enqueueSnackbar(err.message || 'Registration failed', { variant: 'error' });
     } finally {
       setIsLoading(false);
     }
@@ -117,6 +123,7 @@ const Register = () => {
                   onChange={handleChange}
                   className="appearance-none block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
                   disabled={isLoading}
+                  placeholder="+1234567890"
                 />
               </div>
             </div>
@@ -195,12 +202,6 @@ const Register = () => {
               </button>
             </div>
           </form>
-
-          {error && (
-            <div className="mt-4 p-2 bg-red-100 border border-red-400 text-red-700 rounded">
-              {error}
-            </div>
-          )}
 
           <p className="mt-6 text-center text-sm text-gray-600">
             Already have an account?{' '}
